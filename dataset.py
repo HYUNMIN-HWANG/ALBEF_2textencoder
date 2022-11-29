@@ -226,13 +226,13 @@ class KLAID_Dataset (Dataset):
 
         data_dict_test = {
             'fact' : [],
-            'one_hot_label' : 0
+            'laws_service_id' : []
         }
         data_list = []
 
-        num_dataset = len(dataset['fact'])
 
         if mode == "train" : 
+            num_dataset = len(dataset['fact'])
             for i in range(num_dataset) :
                 dict = copy.deepcopy(data_dict)
                 dict['fact'] = dataset['fact'][i]
@@ -243,14 +243,10 @@ class KLAID_Dataset (Dataset):
                 dict['one_hot_label'] = one_hot_label
                 data_list.append(dict)
         else : # mode == "test"
+            num_dataset = len(dataset[0])
             for i in range(num_dataset) :
                 dict = copy.deepcopy(data_dict_test)
-                dict['fact'] = dataset['fact'][i]
-                dict['laws_service'] = dataset['laws_service'][i]
-                id = dataset['laws_service_id'][i]
-                one_hot_label = torch.zeros(177)
-                one_hot_label[id] = 1
-                dict['one_hot_label'] = one_hot_label
+                dict['fact'] = dataset[0][i]
                 data_list.append(dict)
         self.data_sampling = data_list
 

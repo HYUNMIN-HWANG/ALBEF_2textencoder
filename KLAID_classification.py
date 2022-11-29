@@ -16,7 +16,7 @@ import datetime
 from torchvision import transforms
 import torchvision.transforms as T
 import torch.nn.functional as F
-from dataset import KLAID_Dataset, split_train_test_dataset
+from dataset import KLAID_Dataset
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from scheduler import create_scheduler
