@@ -120,7 +120,8 @@ def main(args,config):
         samplers = [None]
 
     data_loader = DataLoader(dataset, batch_size=config['batch_size'], pin_memory=True, drop_last=True)
-    tokenizer = BertTokenizer.from_pretrained(args.text_encoder)
+    # tokenizer = BertTokenizer.from_pretrained(args.text_encoder)
+    tokenizer = BertTokenizer.from_pretrained(args.text_encoder, truncation_side="left")
 
     #### Model ####
     print("Creating model")
