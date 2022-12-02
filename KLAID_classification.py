@@ -47,6 +47,9 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
     tqdm_data_loader = tqdm(data_loader, miniters=print_freq, desc=header)
     for i, data_dict in enumerate(tqdm_data_loader):
         text = data_dict['fact']
+        for j, t in enumerate(text):    # 특수문자, 숫자 제거
+            t = re.sub(r"[^\uAC00-\uD7A3\s]", "", t)
+            text[j] = t
         label = data_dict['laws_service']
         one_hot_label = data_dict['one_hot_label'].to(device)
 
@@ -88,27 +91,29 @@ def evaluate(model, data_loader, tokenizer, device, epoch, writer):
     preds=[]
     answers=[]
 
-    # for text, label, entity_one_hot_label, polarity_one_hot_label in data_loader:
     for data_dict in data_loader:
         text = data_dict['fact']
-        label = data_dict['laws_service']
+        for j, t in enumerate(text):    # 특수문자, 숫자 제거
+            t = re.sub(r"[^\uAC00-\uD7A3\s]", "", t)
+            text[j] = t
         one_hot_label = data_dict['one_hot_label'].to(device)
 
         text_input = tokenizer(text, padding='max_length', truncation=True, max_length=20, return_tensors="pt").to(device)
-
         prediction = model(text_input, [], one_hot_label, train=False)
         prediction = F.softmax(prediction, dim=-1).cpu()
-        preds.append(np.round(prediction.cpu()))
+        _, index = torch.topk(prediction, k=1, dim=-1)
+        prediction = F.one_hot(index, num_classes=177)
+        preds.append(prediction.squeeze().cpu())
         answers.append(one_hot_label.cpu())
 
     preds=torch.cat(preds,dim=0)
     answers=torch.cat(answers,dim=0)
-    print('F1 score[micro]:',f1_score(answers, preds, average='micro'))
+    print('F1 score[macro]:',f1_score(answers, preds, average='macro'))
     print('AUROC:',roc_auc_score(answers, preds, average='micro'))
     print('Accuracy:',((answers == preds).sum() / answers.numel()).item())
     score = f1_score(answers, preds, average='micro')
 
-    writer.add_scalar("Eval/F1 score", f1_score(answers, preds, average='micro'), epoch)
+    writer.add_scalar("Eval/F1 score", f1_score(answers, preds, average='macro'), epoch)
     writer.add_scalar("Eval/F1 AUROC", roc_auc_score(answers, preds, average='micro'), epoch)
     writer.add_scalar("Eval/Accuracy", ((answers == preds).sum() / answers.numel()).item(), epoch)
 
@@ -137,9 +142,11 @@ def train_sentiment_analysis(args, config):
     dataset = load_dataset("lawcompany/KLAID")
     dataset = dataset['train']
 
-    dataset_train, dataset_test = train_test_split(dataset, test_size=0.2, shuffle=True, random_state=232)
-    dataset_train = KLAID_Dataset(dataset_train)
-    dataset_test = KLAID_Dataset(dataset_test)
+    _, dataset_test = train_test_split(dataset, test_size=0.1, shuffle=True, random_state=232)
+    print("Making train dataset")
+    dataset_train = KLAID_Dataset(dataset, mode="train")
+    print("Making eval dataset")
+    dataset_test = KLAID_Dataset(dataset_test, mode="eval")
 
     train_loader = DataLoader(dataset_train, batch_size=config['batch_size_train'], pin_memory=True, drop_last=True, shuffle=True)
     test_loader = DataLoader(dataset_test, batch_size=config['batch_size_test'], pin_memory=True, drop_last=False, shuffle=True)
@@ -156,14 +163,14 @@ def train_sentiment_analysis(args, config):
         state_dict = checkpoint['model']
 
         # reshape positional embedding to accomodate for image resolution change
-        pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'], model.visual_encoder)
-        state_dict['visual_encoder.pos_embed'] = pos_embed_reshaped
+        #pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'], model.visual_encoder)
+        #state_dict['visual_encoder.pos_embed'] = pos_embed_reshaped
 
-        if not args.evaluate:
-            if config['distill']:
-                m_pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder_m.pos_embed'],
-                                                             model.visual_encoder_m)
-                state_dict['visual_encoder_m.pos_embed'] = m_pos_embed_reshaped
+        # if not args.evaluate:
+        #     if config['distill']:
+        #         m_pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder_m.pos_embed'],
+        #                                                      model.visual_encoder_m)
+        #         state_dict['visual_encoder_m.pos_embed'] = m_pos_embed_reshaped
 
         for key in list(state_dict.keys()): #to match the key name when the pretrained model used BertForMaskedLM(which contains BertModel), but fine-tuning model used BertModel
             if 'bert' in key:
@@ -236,7 +243,11 @@ def test_classification(model, tokenizer, device, data_loader):
     tqdm_data_loader = tqdm(data_loader, miniters=print_freq, desc=header)
     for i, data_dict in enumerate(tqdm_data_loader) :
         text = data_dict['fact']
-        text_input = tokenizer(text, padding='max_length', truncation=True, max_length=20, return_tensors="pt").to(device)
+        for j, t in enumerate(text):    # 특수문자, 숫자 제거
+            t = re.sub(r"[^\uAC00-\uD7A3\s]", "", t)
+            text[j] = t
+        text_input = tokenizer(text, padding='max_length', truncation=True, max_length=150, return_tensors="pt").to(device)
+        
         prediction = model(text_input, [], one_hot_label=False, train=False)
         prediction = F.softmax(prediction, dim=-1).cpu()
         prediction_idx = torch.argmax(prediction, axis=1)
@@ -245,7 +256,7 @@ def test_classification(model, tokenizer, device, data_loader):
     predict_res = torch.cat(predict_res, dim=0)
     predict_res = predict_res.tolist()
     return predict_res
- 
+
 def test_sentiment_analysis(args, config):
     print('aa', args.evaluate)
     utils.init_distributed_mode(args)
@@ -263,9 +274,9 @@ def test_sentiment_analysis(args, config):
     print("Creating dataset")
     dataset = jsonlload(args.input_data)
     dataset_test = KLAID_Dataset(dataset, mode="test")
-    test_loader = DataLoader(dataset_test, batch_size=config['batch_size_test'], pin_memory=True, drop_last=False, shuffle=True)
+    test_loader = DataLoader(dataset_test, batch_size=config['batch_size_test'], pin_memory=True, drop_last=False, shuffle=False)
     
-    tokenizer = BertTokenizer.from_pretrained(args.text_encoder)
+    tokenizer = BertTokenizer.from_pretrained(args.text_encoder, truncation_side="left")
 
     #### Model ####
     print("Creating model")
@@ -278,17 +289,17 @@ def test_sentiment_analysis(args, config):
         state_dict = checkpoint['model']
 
         # reshape positional embedding to accomodate for image resolution change
-        pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'], model.visual_encoder)
+        # pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'], model.visual_encoder)
 
-        state_dict['visual_encoder.pos_embed'] = pos_embed_reshaped
+        # state_dict['visual_encoder.pos_embed'] = pos_embed_reshaped
 
-        if config['distill']:
-            m_pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder_m.pos_embed'],
-                                                            model.visual_encoder_m)
-            m_pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder_m.pos_embed'],
-                                                            model.visual_encoder_m)
+        # if config['distill']:
+        #     m_pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder_m.pos_embed'],
+        #                                                     model.visual_encoder_m)
+        #     m_pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder_m.pos_embed'],
+        #                                                     model.visual_encoder_m)
 
-            state_dict['visual_encoder_m.pos_embed'] = m_pos_embed_reshaped
+        #     state_dict['visual_encoder_m.pos_embed'] = m_pos_embed_reshaped
 
         for key in list(state_dict.keys()): #to match the key name when the pretrained model used BertForMaskedLM(which contains BertModel), but fine-tuning model used BertModel
             if 'bert' in key:
@@ -305,7 +316,7 @@ def test_sentiment_analysis(args, config):
     
     pred_data = test_classification(model, tokenizer, device, test_loader)
 
-    jsondump(pred_data, 'E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder\\output_json\\KLAID_output1.json')
+    jsondump(pred_data, args.output_json)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
@@ -314,16 +325,16 @@ def test_sentiment_analysis(args, config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--do_train", default=False, action="store_true")
-    parser.add_argument("--do_eval", default=False, action="store_true")
-    parser.add_argument("--do_test", default=True, action="store_true")
+    parser.add_argument("--do_train", default=True, action="store_true")
+    parser.add_argument("--do_test", default=False, action="store_true")
     parser.add_argument('--input_data', default='E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder\\KLAID_dev_data.json')
-    parser.add_argument('--output_dir', default='E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder/output/KLAID_1/')
-    # parser.add_argument('--checkpoint', default='E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder\\KLAID_1\\checkpoint_29.pth')
-    parser.add_argument('--checkpoint', default='E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder\\output\\KLAID_1\\checkpoint_best.pth')
+    parser.add_argument('--output_dir', default='E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder/output/KLAID_2_2/')
+    parser.add_argument('--checkpoint', default='E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder\\KLAID_2\\checkpoint_29.pth')
+    # parser.add_argument('--checkpoint', default='E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder\\output\\KLAID_1\\checkpoint_best.pth')
+    parser.add_argument('--output_json', default='E:\\STUDY\\KAIST_BISPL\\ALBEF_2textencoder\\output_json\\KLAID_2_2_output.json')
     parser.add_argument('--text_encoder', default='kykim/bert-kor-base')
     parser.add_argument('--evaluate', default=False)    #"True" for validation&test only
-    parser.add_argument('--device', default='cuda')
+    parser.add_argument('--device', default='cuda:1')
     parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('--world_size', default=1, type=int, help='number of distributed processes')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
